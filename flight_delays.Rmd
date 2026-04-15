@@ -1,0 +1,85 @@
+---
+title: "flight_delays"
+output: pdf_document
+date: "2026-04-13"
+---
+
+```{r}
+# Load data
+data <- read.csv("sample_600k.csv")
+
+# Create ROUTE feature
+data$ROUTE <- paste(data$ORIGIN, data$DEST, sep = "_")
+
+# Bin departure hour into categories
+data$DEP_HOUR <- cut(
+  as.numeric(as.character(data$DEP_HOUR)),
+  breaks = c(0, 6, 12, 18, 24),
+  labels = c("night", "morning", "afternoon", "evening"),
+  include.lowest = TRUE
+)
+
+# Convert to factors
+cols <- c("MONTH","DAY_OF_MONTH","DAY_OF_WEEK","OP_UNIQUE_CARRIER",
+          "ORIGIN","DEST","DEP_DEL15","DEP_HOUR","ROUTE")
+
+data[cols] <- lapply(data[cols], as.factor)
+
+# Discretize distance
+data$DISTANCE <- cut(data$DISTANCE, breaks = 5)
+data$DISTANCE <- as.factor(data$DISTANCE)
+
+# Split target
+target <- "DEP_DEL15"
+features <- setdiff(names(data), target)
+
+# Compute prior P(Y)
+prior <- prop.table(table(data[[target]]))
+
+# Compute likelihood tables P(X | Y)
+likelihoods <- list()
+
+for (feature in features) {
+  likelihoods[[feature]] <- table(data[[feature]], data[[target]])
+  
+  # Convert to conditional probabilities
+  likelihoods[[feature]] <- (likelihoods[[feature]] + 1) # Laplace smoothing
+  likelihoods[[feature]] <- prop.table(likelihoods[[feature]], margin=2)
+}
+```
+
+``` {r}
+predict_nb <- function(row, prior, likelihoods, features) {
+  classes <- names(prior)
+  probs <- c()
+  
+  for (y in classes) {
+    prob <- prior[y]
+    
+    for (feature in features) {
+      val <- as.character(row[[feature]])
+      
+      # Handle unseen values
+      if (val %in% rownames(likelihoods[[feature]])) {
+        prob <- prob * likelihoods[[feature]][val, y]
+      } else {
+        prob <- prob * 1e-6
+      }
+    }
+    
+    probs[y] <- prob
+  }
+  
+  return(names(which.max(probs)))
+}
+```
+
+```{r}
+predictions <- apply(data, 1, function(row) {
+  predict_nb(as.list(row), prior, likelihoods, features)
+})
+
+# Accuracy
+accuracy <- mean(predictions == data$DEP_DEL15)
+accuracy
+```
